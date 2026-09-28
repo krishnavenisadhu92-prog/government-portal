@@ -1,0 +1,7 @@
+{
+  "name": "GovtJob AI — Government Job & Internship Portal",
+  "description": "Comprehensive AI-powered portal for Andhra Pradesh & Central Government jobs, cybersecurity careers, student internships, women opportunities, certificate document intelligence, and eligibility matching.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
