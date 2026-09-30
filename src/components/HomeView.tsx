@@ -96,6 +96,13 @@ export const HomeView: React.FC = () => {
           {/* Quick Category Jump Pills */}
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2 text-xs font-medium">
             <button
+              onClick={() => setActiveTab('assistant')}
+              className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-purple-800 to-indigo-800 hover:from-purple-700 hover:to-indigo-700 border border-purple-400/50 text-amber-300 font-bold transition-all flex items-center gap-1.5 shadow-sm hover:scale-105"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-300 animate-pulse" />
+              🤖 Ask AI Chatbot (n8n Powered)
+            </button>
+            <button
               onClick={() => setActiveTab('ap-jobs')}
               className="px-3.5 py-1.5 rounded-xl bg-slate-800/60 hover:bg-slate-800 border border-slate-700/80 text-slate-200 transition-colors flex items-center gap-1.5"
             >

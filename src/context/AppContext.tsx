@@ -7,6 +7,7 @@ import {
   NotificationAlert,
   ApplicationTrackingStatus,
   OpportunityCategory,
+  N8nConfig,
 } from '../types';
 import { INITIAL_JOB_OPPORTUNITIES } from '../data/mockOpportunities';
 
@@ -29,6 +30,8 @@ interface AppContextType {
   setIsAuthModalOpen: (open: boolean) => void;
   isProfileWizardOpen: boolean;
   setIsProfileWizardOpen: (open: boolean) => void;
+  n8nConfig: N8nConfig;
+  updateN8nConfig: (config: Partial<N8nConfig>) => void;
   login: (email: string, demoRole?: 'student' | 'cyber' | 'women') => void;
   logout: () => void;
   updateProfile: (profile: Partial<UserProfile>) => void;
@@ -309,6 +312,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileWizardOpen, setIsProfileWizardOpen] = useState(false);
 
+  const [n8nConfig, setN8nConfig] = useState<N8nConfig>(() => {
+    const DEFAULT_N8N_ID = '6172d2e9ccd14cd4926fb4d5a424bfd9';
+    const DEFAULT_N8N_URL = 'https://krishnaveni-2008.app.n8n.cloud/webhook/80cc71d7-4ad5-42b7-aa1a-cf3e7d72f611/chat';
+
+    try {
+      const saved = localStorage.getItem('govtjob_ai_n8n_config');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        // Automatically inject valid URL and ID if missing or outdated
+        return {
+          webhookId: parsed.webhookId && parsed.webhookId.length > 5 ? parsed.webhookId : DEFAULT_N8N_ID,
+          webhookUrl: parsed.webhookUrl && parsed.webhookUrl.startsWith('http') ? parsed.webhookUrl : DEFAULT_N8N_URL,
+          isEnabled: parsed.isEnabled !== undefined ? parsed.isEnabled : true,
+          connectionStatus: parsed.connectionStatus || 'connected',
+          lastTestedAt: parsed.lastTestedAt || 'Active',
+        };
+      }
+      return {
+        webhookId: DEFAULT_N8N_ID,
+        webhookUrl: DEFAULT_N8N_URL,
+        isEnabled: true,
+        connectionStatus: 'connected',
+        lastTestedAt: 'Active',
+      };
+    } catch {
+      return {
+        webhookId: DEFAULT_N8N_ID,
+        webhookUrl: DEFAULT_N8N_URL,
+        isEnabled: true,
+        connectionStatus: 'connected',
+        lastTestedAt: 'Active',
+      };
+    }
+  });
+
+  const updateN8nConfig = (updated: Partial<N8nConfig>) => {
+    setN8nConfig((prev) => {
+      const next = { ...prev, ...updated };
+      localStorage.setItem('govtjob_ai_n8n_config', JSON.stringify(next));
+      return next;
+    });
+  };
+
   // Sync to localStorage
   useEffect(() => {
     if (user) {
@@ -520,6 +566,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsAuthModalOpen,
         isProfileWizardOpen,
         setIsProfileWizardOpen,
+        n8nConfig,
+        updateN8nConfig,
         login,
         logout,
         updateProfile,

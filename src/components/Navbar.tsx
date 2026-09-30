@@ -57,7 +57,7 @@ export const Navbar: React.FC = () => {
     { id: 'search', label: 'Search & Filters' },
     { id: 'dashboard', label: 'Dashboard & Tracker' },
     { id: 'certificates', label: 'Certificates & OCR' },
-    { id: 'assistant', label: 'AI Assistant', highlight: true },
+    { id: 'assistant', label: 'AI Chatbot 🤖', highlight: true },
   ];
 
   return (

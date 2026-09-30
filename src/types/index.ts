@@ -201,4 +201,15 @@ export interface ChatMessage {
   timestamp: string;
   suggestedActions?: { label: string; actionType: string; payload?: string }[];
   referencedJobId?: string;
+  source?: 'gemini' | 'n8n' | 'system';
+  n8nStatus?: 'success' | 'fallback' | 'testing';
+}
+
+export interface N8nConfig {
+  webhookId: string;
+  webhookUrl: string;
+  isEnabled: boolean;
+  lastTestedAt?: string;
+  connectionStatus: 'connected' | 'untested' | 'error';
+  errorDetails?: string;
 }

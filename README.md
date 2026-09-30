@@ -78,7 +78,21 @@ GEMINI_API_KEY="your-gemini-api-key"
 
 # Port (defaults to 3000)
 PORT=3000
+
+# n8n Automation Workflow Webhook
+N8N_WEBHOOK_URL="https://krishnaveni-2008.app.n8n.cloud/webhook/80cc71d7-4ad5-42b7-aa1a-cf3e7d72f611/chat"
+N8N_WEBHOOK_ID="6172d2e9ccd14cd4926fb4d5a424bfd9"
 ```
+
+---
+
+## ⚡ n8n Workflow Automation & AI Agent Training
+
+GovtJob AI Assistant is directly integrated with an n8n Cloud Chat Workflow:
+- **Webhook Endpoint**: `https://krishnaveni-2008.app.n8n.cloud/webhook/80cc71d7-4ad5-42b7-aa1a-cf3e7d72f611/chat`
+- **Webhook ID**: `6172d2e9ccd14cd4926fb4d5a424bfd9`
+- **Training Data Export Endpoint**: `GET /api/training-data` returns all active vacancies across Andhra Pradesh, Central Government, Cybersecurity, Student Internships, and Women Schemes in structured JSON.
+- **In-Chat Training Studio**: Click **"Train AI Agent / Website Data"** in the chatbot to inspect the formatted markdown system prompt, copy the dataset for your n8n LLM nodes, download `govtjob_ai_training_dataset.json`, or click **"Sync to n8n Webhook"** to dispatch the entire website knowledge base directly to your n8n workflow.
 
 ### Installation & Run
 

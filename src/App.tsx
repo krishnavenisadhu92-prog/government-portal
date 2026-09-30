@@ -14,6 +14,7 @@ import { JobDetailModal } from './components/JobDetailModal';
 import { EligibilityModal } from './components/EligibilityModal';
 import { AuthModal } from './components/AuthModal';
 import { ProfileWizardModal } from './components/ProfileWizardModal';
+import { FloatingChatWidget } from './components/FloatingChatWidget';
 
 const MainLayout: React.FC = () => {
   const {
@@ -126,6 +127,7 @@ const MainLayout: React.FC = () => {
 
       <AuthModal />
       <ProfileWizardModal />
+      <FloatingChatWidget />
     </div>
   );
 };

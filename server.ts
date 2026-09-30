@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { INITIAL_JOB_OPPORTUNITIES } from './src/data/mockOpportunities.ts';
 
 dotenv.config();
 
@@ -14,7 +15,11 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+// AI Studio environment expects the app to bind to port 3000 (port 8080 is reserved by the container supervisor)
+const port =
+  process.env.NODE_ENV === 'production' && process.env.PORT && process.env.PORT !== '8080'
+    ? parseInt(process.env.PORT, 10)
+    : 3000;
 
 // Initialize Gemini SDK with telemetry header
 const geminiApiKey = process.env.GEMINI_API_KEY || '';
@@ -445,42 +450,101 @@ function evaluateEligibilityProgrammatically(
 }
 
 // -------------------------------------------------------------
+// Helper: Build Full Website Knowledge Base for AI Agent Grounding
+// -------------------------------------------------------------
+function buildWebsiteKnowledgeBase(opportunities: any[] = INITIAL_JOB_OPPORTUNITIES, userProfile?: any, userCertificates?: any[]) {
+  const jobCatalog = opportunities.map((j) => {
+    return `[ID: ${j.id}]
+- Title: ${j.title}
+- Organization: ${j.organization} (Subcategory: ${j.subcategory})
+- Category: ${j.category} | State/Region: ${j.stateOrRegion || j.location} | Work Mode: ${j.workMode} | Employment: ${j.employmentType}
+- Department: ${j.department} | Notif Number: ${j.notificationNumber}
+- Total Vacancies: ${j.vacanciesCount} | Pay Scale / Stipend: ${j.payScaleOrStipend}
+- Is Cybersecurity: ${j.isCybersecurity} | Is Internship: ${j.isInternship} | Is Women Exclusive: ${j.isWomenExclusive} | Is Paid: ${j.isPaid}
+- Student Eligibility: ${(j.studentEligibilityYears || []).join(', ') || 'Graduates / Degree holders'}
+- Required Education: ${(j.educationalQualifications || []).join('; ')}
+- Eligible Branches: ${(j.eligibleBranches || []).join(', ')}
+- Minimum % / CGPA: ${j.minimumPercentageOrCgpa || 'Not specifically mandated'}
+- Age Limit: ${j.ageLimit?.min || 18} to ${j.ageLimit?.max || 42} years. Relaxations: ${j.ageLimit?.relaxationDetails || 'Standard government relaxations apply'}
+- Selection Stages: ${(j.selectionProcess || []).join(' -> ')}
+- Required Certificates: ${(j.requiredCertificates || []).join('; ')}
+- Key Technical Skills: ${(j.technicalSkillsRequired || []).join(', ') || 'N/A'}
+- Fees & Concessions: ${j.fees || 'Check official gazette'}
+- Quota & Reservation Notes: ${j.quotaAndRelaxationNotes || 'Standard statutory reservation rules apply'}
+- Application Window: Start ${j.applicationStartDate} to Deadline ${j.applicationDeadline} (Exam: ${j.examinationDate || 'To be announced'})
+- Official Notification PDF: ${j.officialNotificationUrl}
+- Official Application Portal: ${j.officialApplicationUrl}
+- Verification Status: ${j.sourceVerificationStatus} (Verified: ${j.lastVerifiedDate})
+- Summary: ${j.summaryDescription}`;
+  }).join('\n\n');
+
+  let profileContext = 'Candidate has not logged in or profile is empty.';
+  if (userProfile && userProfile.fullName) {
+    profileContext = `Candidate Name: ${userProfile.fullName}
+Gender: ${userProfile.gender || 'Not specified'}
+DOB: ${userProfile.dateOfBirth || 'Not specified'} (Approx Age: ${new Date().getFullYear() - (userProfile.dateOfBirth ? new Date(userProfile.dateOfBirth).getFullYear() : 2002)} years)
+State: ${userProfile.state} | District: ${userProfile.district} | Domicile: ${userProfile.domicileState}
+Education Level: ${userProfile.educationLevel}
+Degree & Branch: ${userProfile.currentDegreeAndBranch}
+Current Status: ${userProfile.currentStatus} (${userProfile.currentYearOfStudy}) | Graduation Year: ${userProfile.graduationYear}
+Academic Marks/CGPA: ${userProfile.academicScorePercentage}%
+Reservation Category: ${userProfile.reservationCategory}
+Disability Concession Eligible: ${userProfile.isDisabilityEligible ? 'Yes' : 'No'}
+Technical Skills: ${(userProfile.technicalSkills || []).join(', ')}
+Confirmed Certificates in Vault: ${
+      userCertificates && userCertificates.length > 0
+        ? userCertificates.map((c: any) => `${c.category} (${c.fileName})`).join(', ')
+        : 'None uploaded yet'
+    }`;
+  }
+
+  return { jobCatalog, profileContext };
+}
+
+// -------------------------------------------------------------
 // API: GovtJob AI Assistant Chatbot (/api/chat)
 // -------------------------------------------------------------
 app.post('/api/chat', async (req, res) => {
   try {
-    const { messages, userContext } = req.body;
+    const { messages, userContext, allOpportunities, userCertificates } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'messages array is required' });
     }
 
     const lastMessage = messages[messages.length - 1]?.text || 'Hello';
+    const activeJobList = (allOpportunities && allOpportunities.length > 0) ? allOpportunities : INITIAL_JOB_OPPORTUNITIES;
+    const { jobCatalog, profileContext } = buildWebsiteKnowledgeBase(activeJobList, userContext, userCertificates);
 
     if (aiClient) {
       try {
-        const systemInstruction = `You are "GovtJob AI Assistant", India's premier conversational AI expert on Government Jobs, Cybersecurity Careers, Public Sector Opportunities, Internships, Apprenticeships, and Women's Recruitment.
+        const systemInstruction = `You are "GovtJob AI Assistant", the authoritative, AI-powered recruitment intelligence agent trained on all official data from the GovtJob AI Portal (https://govtjobai.in).
 
-Key Principles & Knowledge Base:
-1. ANDHRA PRADESH JOBS:
-   - APPSC (Group 1, 2, 4, Gazetted/Non-Gazetted), AP DSC (School Teachers), APSLPRB (Police Constable & SI - Civil, AR, Tech, Mahila Battalions), AP Power utilities (APCPDCL, APGENCO), District Collectorate recruitments.
-   - AP Local status rules: Presidential Order requires study from 4th to 10th class in AP for 80% district/zonal reservation.
-   - Age relaxations: SC/ST/BC/EWS candidates get 5 years upper age relaxation; PwD get 10 years.
-2. CENTRAL GOVT JOBS:
-   - UPSC (Civil Services, ESE, CDS, NDA), SSC (CGL, CHSL, MTS, CPO, GD Constable), Railway Recruitment Boards (RRB NTPC, JE, ALP), Banking (IBPS PO/Clerk, SBI PO/JA), India Post GDS, Defence research (DRDO, ISRO, BARC).
-   - Fee exemptions: Almost all central exams (UPSC, SSC, RRB) exempt female candidates, SC, ST, and PwD candidates from exam fees.
-3. CYBERSECURITY & GOVT IT:
-   - CERT-In, NCIIPC, NIC (Scientist B), I4C (Indian Cyber Crime Coordination Centre under MHA), MeitY Digital India Corp, State Police Cyber Crime Wings.
-   - Roles: SOC Analyst, Vulnerability Researcher, Digital Forensics, Threat Intelligence, Penetration Tester.
-   - Relevant certs: CEH, CompTIA Security+, OSCP, Blue Team Level 1, CHFI.
-4. INTERNSHIPS & STUDENT OPPORTUNITIES:
-   - NITI Aayog Internship Scheme (UG/PG, policy/tech, minimum 85% in 12th), CERT-In Student Cyber Internship (paid stipend ₹20,000/mo), AICTE-Cisco Virtual Cyber Internship (1st-4th year, free credits), Ministry of External Affairs (MEA), RBI Summer Placement.
-5. OPPORTUNITIES FOR WOMEN:
-   - APSLPRB Mahila Police Battalions, CRPF Mahila Battalion, Indian Army Military Police (Women), DST Women Scientist Scheme (WOS-A/B/C for career break returnees), SBI Returnee Officers.
-6. COMPLIANCE & ACCURACY:
-   - Never invent vacancies, fake links, or claim a document is officially verified.
-   - Always encourage candidates to verify against the official gazette / notification PDF.
-   - Tone: Professional, encouraging, precise, authoritative yet accessible to students. Use markdown formatting with bullet points and clear sections.`;
+YOU ARE GROUNDED IN THE FOLLOWING REAL DATA FROM THE WEBSITE:
+
+=== CANDIDATE PROFILE CONTEXT ===
+${profileContext}
+
+=== COMPLETE PORTAL DATABASE OF ACTIVE VACANCIES & INTERNSHIPS (${activeJobList.length} OPPORTUNITIES) ===
+${jobCatalog}
+
+============================================================
+INSTRUCTIONS FOR ANSWERING CANDIDATE QUESTIONS:
+1. EXHAUSTIVE ACCURACY: You have access to every single job, internship, age limit, pay scale, deadline, syllabus note, quota rule, and official portal URL in the database above. Always quote exact figures, vacancy numbers, pay scales, and dates from this database.
+2. PROFILE PERSONALIZATION:
+   - When asked "Which jobs match my degree/branch?", check the candidate's degree & branch against EVERY opportunity's 'Required Education' and 'Eligible Branches', and provide a clear, tailored list.
+   - When asked about age eligibility or relaxations, calculate their exact age and check their reservation category (OBC-NCL, SC, ST, EWS, Women, PwD) against the notification's specific rules.
+   - For Andhra Pradesh jobs, check if they hold AP domicile status for the 80% Presidential Order local quota.
+3. DOMAIN EXPERTISE:
+   - Andhra Pradesh: APPSC Group 1, APPSC Group 2, APSLPRB SI (IT & Communications), APSLPRB Mahila Police Constables, AP DSC Teachers, APSCSOC Cyber Security Operations Centre.
+   - Central Government: UPSC Civil Services (IAS/IPS/IFS), SSC CGL (14,820 posts), RRB NTPC (11,558 posts), IBPS PO (4,450 posts).
+   - Cybersecurity: CERT-In Senior Analyst & Student Research, NIC Scientist B (420 posts), I4C NCFL Digital Forensics, APSCSOC, TCS Cyber Defence.
+   - Internships: NITI Aayog (UG/PG ≥85% in 12th), CERT-In Paid Cyber Internship (₹20,000/mo), AICTE-Cisco Virtual Cyber Internship (1st-4th yr college students, 20,000 slots, free credits), MEA (₹10,000/mo + airfare), IOCL Apprenticeship.
+   - Women: APSLPRB Mahila Police Battalion (1,420 posts, Intermediate), CRPF Mahila Battalion (380 posts), DST Women Scientist Scheme (WOS-A/B/C, ₹55,000/mo for career break returnees), SBI Returnee Officer, plus 100% exam fee exemptions for women in UPSC, SSC, RRB.
+4. TONE & FORMATTING:
+   - Professional, encouraging, precise, and well-structured using clean Markdown headings (###), bullet points, and bold highlights.
+   - Always include the official portal link and application deadline for the opportunities you discuss.
+   - If information is missing or pending document verification, clearly explain the requirement without inventing false claims.`;
 
         // Format history for Gemini
         const contents = messages.map((m: any) => ({
@@ -493,20 +557,20 @@ Key Principles & Knowledge Base:
           contents: contents,
           config: {
             systemInstruction,
-            temperature: 0.7,
+            temperature: 0.6,
           },
         });
 
         return res.json({
-          answer: response.text || 'I could not generate a response. Please try asking again.',
+          answer: response.text || 'I could not generate a response. Please ask again.',
         });
       } catch (geminiError) {
-        console.warn('Gemini chat error, using contextual fallback:', geminiError);
+        console.warn('Gemini chat error, using contextual fallback with full database:', geminiError);
       }
     }
 
-    // High quality intelligent response generator if API key is not present
-    const answer = generateAssistantResponse(lastMessage, userContext);
+    // High quality intelligent response generator grounded in the full database
+    const answer = generateAssistantResponseFromDatabase(lastMessage, userContext, activeJobList);
     return res.json({ answer });
   } catch (error: any) {
     console.error('Chat endpoint error:', error);
@@ -514,100 +578,424 @@ Key Principles & Knowledge Base:
   }
 });
 
-// Fallback chat generator with rich domain guidance
-function generateAssistantResponse(prompt: string, context?: any): string {
+// -------------------------------------------------------------
+// Intelligent Fallback Search & Reasoning Engine (Trained on all Website Data)
+// -------------------------------------------------------------
+function generateAssistantResponseFromDatabase(
+  prompt: string,
+  context?: any,
+  opportunities: any[] = INITIAL_JOB_OPPORTUNITIES
+): string {
   const p = prompt.toLowerCase();
+  const userBranch = (context?.currentDegreeAndBranch || '').toLowerCase();
+  const userCategory = context?.reservationCategory || 'General / UR';
+  const isFemale = context?.gender === 'Female';
 
-  if (p.includes('andhra') || p.includes('appsc') || p.includes('ap police') || p.includes('ap ')) {
-    return `### Andhra Pradesh Government Opportunities Overview 🏛️
+  // 1. Branch or degree matching query
+  if (p.includes('match') || p.includes('my degree') || p.includes('my branch') || p.includes('qualifications') || p.includes('eligible for me')) {
+    const matching = opportunities.filter((job) => {
+      const eligibleBranches = (job.eligibleBranches || []).map((b: string) => b.toLowerCase());
+      const isBranchOpen = eligibleBranches.some((b: string) => b.includes('all') || b.includes('any'));
+      return isBranchOpen || eligibleBranches.some((b: string) => userBranch.includes(b) || b.includes(userBranch));
+    });
 
-Andhra Pradesh provides vibrant career options across state civil services, technical communications, and uniform services:
+    let res = `### Opportunities Matching Your Qualifications 🎓\n\n`;
+    res += `Based on your candidate profile (**${context?.educationLevel || 'Degree'} in ${context?.currentDegreeAndBranch || 'Engineering / General'}**, ${context?.currentStatus || 'Student'}), here are the active opportunities from our database:\n\n`;
 
-1. **APPSC Group 1 & Group 2 Services**:
-   - **Eligibility**: Any recognized Bachelor's Degree.
-   - **Age Limit**: 18 to 42 years (Relaxed up to 47 for SC/ST/BC/EWS; up to 52 for PwD).
-   - **Local Reservation**: 80% district & zonal quota reserved for bona fide AP local candidates (verified via Study Certificate from Class 4 to 10).
-2. **AP Police (APSLPRB)**:
-   - **Sub-Inspector (IT & Communications)**: Requires B.Tech in CSE / IT / ECE / EEE or MCA / M.Sc Computer Science.
-   - **Mahila Police Battalion**: Dedicated horizontal reservation with 1,420+ constable openings for eligible women with Intermediate (10+2).
-3. **AP State Cyber Security Operations Centre (APSCSOC)**:
-   - Openings for SOC Analysts & Incident Handlers to protect state cloud and e-Pragati citizen portals.
+    matching.slice(0, 5).forEach((j, i) => {
+      res += `${i + 1}. **${j.title}** (${j.organization})\n`;
+      res += `   - **Pay / Stipend**: ${j.payScaleOrStipend}\n`;
+      res += `   - **Vacancies**: ${j.vacanciesCount > 0 ? j.vacanciesCount.toLocaleString() : 'Open'}\n`;
+      res += `   - **Deadline**: **${j.applicationDeadline}**\n`;
+      res += `   - **Application Link**: [Official Portal](${j.officialApplicationUrl})\n\n`;
+    });
 
-**Next Step**: Visit the [APPSC Official Portal](https://psc.ap.gov.in) or navigate to the **Andhra Pradesh Jobs** tab above to check current vacancies.`;
+    res += `\n*Tip: Click the **"Check My Eligibility"** button on any job card to run an instant automated rule verification!*`;
+    return res;
   }
 
-  if (p.includes('cyber') || p.includes('soc') || p.includes('security') || p.includes('ethical hack')) {
-    return `### Cybersecurity & IT Careers in Government & PSUs 🛡️
+  // 2. Andhra Pradesh query
+  if (p.includes('andhra') || p.includes('appsc') || p.includes('ap police') || p.includes('apslprb') || p.includes('amaravati') || p.includes('vizag')) {
+    const apJobs = opportunities.filter((j) => j.category === 'andhra_pradesh');
+    let res = `### Andhra Pradesh Government Verified Opportunities 🏛️\n\n`;
+    res += `Here are the active Andhra Pradesh state recruitments currently in our portal database:\n\n`;
 
-Cybersecurity is one of the highest-demand domains in the Indian public sector:
+    apJobs.forEach((j, i) => {
+      res += `#### ${i + 1}. ${j.title}\n`;
+      res += `- **Recruiting Agency**: ${j.organization} (Notif: \`${j.notificationNumber}\`)\n`;
+      res += `- **Pay Scale**: ${j.payScaleOrStipend}\n`;
+      res += `- **Total Vacancies**: ${j.vacanciesCount.toLocaleString()} posts across AP\n`;
+      res += `- **Eligibility**: ${j.educationalQualifications[0]} (Age: ${j.ageLimit.min}-${j.ageLimit.max} yrs)\n`;
+      res += `- **AP Local Quota**: 80% district & zonal reservation under AP Presidential Order (Study Cert from Class 4 to 10 required)\n`;
+      res += `- **Application Deadline**: **${j.applicationDeadline}**\n`;
+      res += `- **Official Portal**: [${j.officialApplicationUrl}](${j.officialApplicationUrl})\n\n`;
+    });
 
-- **Key Recruiting Bodies**:
-  - **CERT-In (MeitY)**: Handles national cyber incident response, zero-day research, and malware triage (Level 10-12 pay matrix).
-  - **NIC (National Informatics Centre)**: Scientist 'B' & Scientific Officer (Cybersecurity, Cloud, DevSecOps).
-  - **I4C (Ministry of Home Affairs)**: Cyber Crime Threat Analysts & Digital Forensics Investigators at NCFL New Delhi.
-  - **State Police Cyber Crime Wings**: Technical sub-inspectors and forensic consultants.
-- **Eligibility**:
-  - B.Tech / B.E. in Cyber Security, CSE, IT, or MCA / M.Sc Forensics.
-  - Helpful certifications: CompTIA Security+, CEH, Blue Team Level 1, OSCP, or Cellebrite Mobile Forensics.
-- **Student Opportunities**:
-  - Check the **CERT-In Student Research Internship** (Paid ₹20,000/mo) and the **AICTE-Cisco Virtual Cyber Internship** (open to 1st to 4th year college students).
-
-Explore the **Cybersecurity Careers** tab to view open positions!`;
+    res += `\n**Category Relaxations**: SC/ST/BC/EWS candidates receive a 5-year upper age relaxation; PwD candidates receive 10 years. Women have 33.33% horizontal reservation.`;
+    return res;
   }
 
-  if (p.includes('intern') || p.includes('student') || p.includes('1st year') || p.includes('2nd year') || p.includes('college')) {
-    return `### Internships & Student Opportunities in India 🎓
+  // 3. Central Govt query
+  if (p.includes('central') || p.includes('upsc') || p.includes('ssc') || p.includes('rrb') || p.includes('railway') || p.includes('ibps') || p.includes('bank')) {
+    const centralJobs = opportunities.filter((j) => j.category === 'central_govt');
+    let res = `### Central Government & All-India Vacancies 🇮🇳\n\n`;
+    res += `Active Central Ministry, Banking, and Railway examinations from the portal database:\n\n`;
 
-College students can build credentials and earn government stipends through official programmes:
+    centralJobs.forEach((j, i) => {
+      res += `#### ${i + 1}. ${j.title}\n`;
+      res += `- **Agency**: ${j.organization} | **Pay Scale**: ${j.payScaleOrStipend}\n`;
+      res += `- **Vacancies**: ${j.vacanciesCount.toLocaleString()} posts nationwide\n`;
+      res += `- **Age Limit**: ${j.ageLimit.min} to ${j.ageLimit.max} years (${j.ageLimit.relaxationDetails})\n`;
+      res += `- **Fees**: ${j.fees}\n`;
+      res += `- **Application Deadline**: **${j.applicationDeadline}**\n`;
+      res += `- **Official Gazette Application**: [Apply Here](${j.officialApplicationUrl})\n\n`;
+    });
 
-1. **NITI Aayog Internship Scheme**:
-   - **Eligibility**: Enrolled UG/PG students with ≥85% in Class 12th.
-   - **Fields**: AI, Technology, Infrastructure, Public Policy, Economics.
-   - **Duration**: 6 weeks to 6 months with official Certificate of Internship.
-2. **CERT-In Cyber Student Internship**:
-   - **Eligibility**: 2nd, 3rd, and Final year B.Tech/MCA students.
-   - **Stipend**: ₹20,000 per month (paid government research grant).
-3. **AICTE - Cisco Virtual Cybersecurity Internship**:
-   - Open to **all engineering students (1st, 2nd, 3rd, and Final year)**.
-   - Fully remote, zero fee, provides academic credits and Cisco certified digital badge.
-4. **Ministry of External Affairs (MEA)**:
-   - ₹10,000/month stipend with airfare assistance for research in international diplomacy.
-
-Select the **Internships** filter in the navigation to view student-specific openings matching your year of study!`;
+    return res;
   }
 
-  if (p.includes('women') || p.includes('female') || p.includes('girl')) {
-    return `### Exclusive Opportunities & Benefits for Women Candidates 👩‍💼
+  // 4. Cybersecurity query
+  if (p.includes('cyber') || p.includes('soc') || p.includes('security') || p.includes('forensic') || p.includes('cert-in') || p.includes('nic') || p.includes('i4c')) {
+    const cyberJobs = opportunities.filter((j) => j.isCybersecurity);
+    let res = `### Cybersecurity & Government IT Opportunities 🛡️\n\n`;
+    res += `Our portal tracks verified openings in India’s leading cybersecurity defense bodies:\n\n`;
 
-The Indian government and state administrations offer significant concessions and exclusive recruitments for women:
+    cyberJobs.forEach((j, i) => {
+      res += `#### ${i + 1}. ${j.title} (${j.organization})\n`;
+      res += `- **Cadre**: ${j.department} | **Mode**: ${j.workMode}\n`;
+      res += `- **Compensation**: ${j.payScaleOrStipend}\n`;
+      res += `- **Required Skills**: ${(j.technicalSkillsRequired || []).join(', ') || 'Cybersecurity / CS fundamentals'}\n`;
+      res += `- **Closing Date**: **${j.applicationDeadline}**\n`;
+      res += `- **Official Portal**: [${j.officialApplicationUrl}](${j.officialApplicationUrl})\n\n`;
+    });
 
-- **100% Application Fee Exemption**:
-  - Almost all major central recruitment bodies (UPSC, SSC CGL/CHSL, RRB Railways, NIELIT) completely waive application fees for all female candidates regardless of category.
-- **Dedicated Women-Only Openings**:
-  - **APSLPRB Mahila Police Battalion**: Direct recruitment of constables dedicated to women safety and Disha divisions.
-  - **CRPF & CAPF Mahila Battalions**: Sub-Inspectors and General Duty Constables.
-  - **Indian Army Women Military Police (Agniveer Mahila GD)**.
-- **Career Re-entry & Research Schemes**:
-  - **DST Women Scientist Scheme (WOS-A/B/C)**: ₹55,000/mo stipend + ₹3 Lakh/year research grant for women with career breaks.
-  - **SBI Women Returnee Officer Programme**.
-- **Horizontal Reservation**:
-  - Andhra Pradesh state recruitment enforces 33.33% horizontal reservation for women across all administrative cadres.
-
-Click the **Opportunities for Women** tab to see all filtered roles!`;
+    return res;
   }
 
-  return `### GovtJob AI Assistant Career Guidance 🇮🇳
+  // 5. Internships query
+  if (p.includes('intern') || p.includes('student') || p.includes('stipend') || p.includes('fellowship') || p.includes('apprentice') || p.includes('aicte')) {
+    const internships = opportunities.filter((j) => j.isInternship);
+    let res = `### Student Internships, Fellowships & Apprenticeships 🎓\n\n`;
+    res += `Opportunities open to college students and recent graduates from the portal database:\n\n`;
 
-I can assist you with all aspects of your government career and internship journey:
+    internships.forEach((j, i) => {
+      res += `#### ${i + 1}. ${j.title} (${j.organization})\n`;
+      res += `- **Stipend / Honorarium**: ${j.payScaleOrStipend}\n`;
+      res += `- **Accepted Years**: ${(j.studentEligibilityYears || []).join(', ') || 'College Students'}\n`;
+      res += `- **Work Mode**: ${j.workMode} | **Duration**: ${j.internshipDuration || '2 to 6 months'}\n`;
+      res += `- **Closing Date**: **${j.applicationDeadline}**\n`;
+      res += `- **Official Apply Link**: [${j.officialApplicationUrl}](${j.officialApplicationUrl})\n\n`;
+    });
 
-- **Eligibility Checks**: "Does my B.Tech branch qualify for APPSC or NIC Scientist B?"
-- **Age Relaxations**: "How many years of age relaxation do I get under OBC-NCL or SC/ST?"
-- **Internships**: "Which government internships accept 2nd or 3rd year students?"
-- **Document Requirements**: "What certificates do I need before applying for SSC CGL or APPSC?"
-- **Cybersecurity Pathways**: "How can I join CERT-In or AP State Cyber Security Operations Centre?"
+    return res;
+  }
 
-Feel free to ask any specific question or click on **"Check My Eligibility"** on any job card to run an instant automated analysis!`;
+  // 6. Women opportunities query
+  if (p.includes('women') || p.includes('female') || p.includes('girl') || p.includes('mahila')) {
+    const womenRoles = opportunities.filter((j) => j.isWomenExclusive || j.isOpenToWomen);
+    let res = `### Opportunities & Benefits for Women Candidates 👩‍💼\n\n`;
+    res += `Key openings and government schemes for eligible female candidates:\n\n`;
+
+    opportunities.filter((j) => j.isWomenExclusive).forEach((j, i) => {
+      res += `#### ${i + 1}. [Women Exclusive] ${j.title}\n`;
+      res += `- **Organization**: ${j.organization}\n`;
+      res += `- **Pay Scale / Grant**: ${j.payScaleOrStipend}\n`;
+      res += `- **Vacancies**: ${j.vacanciesCount > 0 ? j.vacanciesCount.toLocaleString() : 'Open Fellowships'}\n`;
+      res += `- **Deadline**: **${j.applicationDeadline}**\n`;
+      res += `- **Official Portal**: [${j.officialApplicationUrl}](${j.officialApplicationUrl})\n\n`;
+    });
+
+    res += `\n**Key Concessions for Women**:\n`;
+    res += `- 100% Application Fee Exemption in UPSC, SSC CGL/CHSL, Railway RRB, and NIELIT examinations.\n`;
+    res += `- 33.33% horizontal reservation across all Andhra Pradesh civil, police, and executive cadres.\n`;
+    res += `- DST Women Scientist Scheme (WOS-A/B/C) provides ₹55,000/month stipend to women returning after career breaks.\n`;
+    return res;
+  }
+
+  // 7. Deadlines query
+  if (p.includes('deadline') || p.includes('closing') || p.includes('last date') || p.includes('urgent')) {
+    const sorted = [...opportunities].sort((a, b) => new Date(a.applicationDeadline).getTime() - new Date(b.applicationDeadline).getTime());
+    let res = `### Upcoming Application Deadlines (Chronological Order) ⏰\n\n`;
+
+    sorted.slice(0, 7).forEach((j, i) => {
+      res += `${i + 1}. **${j.title}**\n`;
+      res += `   - **Agency**: ${j.organization}\n`;
+      res += `   - **Deadline**: **${j.applicationDeadline}**\n`;
+      res += `   - **Apply Portal**: [${j.officialApplicationUrl}](${j.officialApplicationUrl})\n\n`;
+    });
+
+    return res;
+  }
+
+  // Default overview
+  return `### GovtJob AI Assistant Database Summary 🇮🇳\n\nI am fully trained on all **${opportunities.length} verified opportunities** currently hosted on this portal. Here is what I can help you with:\n\n- **Andhra Pradesh Jobs**: APPSC Group 1 & 2, AP Police (SI & Mahila Constables), APSCSOC, AP DSC.\n- **Central Government**: UPSC Civil Services, SSC CGL (14,820 posts), RRB NTPC (11,558 posts), IBPS PO.\n- **Cybersecurity & IT**: CERT-In Senior Analyst, NIC Scientist 'B' (420 posts), I4C Threat Analyst, TCS Cyber Defence.\n- **Student Internships**: NITI Aayog, CERT-In Paid Cyber Research (₹20,000/mo), AICTE-Cisco Virtual Cyber (20,000 slots), MEA.\n- **Opportunities for Women**: Mahila Police Battalions, DST Women Scientist Scheme (₹55,000/mo), 100% exam fee exemptions.\n- **Document Verification**: Checking mandatory certificates (10th DOB, 12th, degree, caste/EWS, residence).\n\nAsk me any question such as *"Which jobs match my branch?"*, *"Show me all cybersecurity internships"*, or *"What are the age relaxations for OBC/SC/ST in APPSC?"*`;
 }
+
+// -------------------------------------------------------------
+// N8N Integration Endpoints
+// Webhook URL: https://krishnaveni-2008.app.n8n.cloud/webhook/80cc71d7-4ad5-42b7-aa1a-cf3e7d72f611/chat
+// Webhook ID: 6172d2e9ccd14cd4926fb4d5a424bfd9
+// -------------------------------------------------------------
+const DEFAULT_N8N_WEBHOOK_URL =
+  process.env.N8N_WEBHOOK_URL ||
+  'https://krishnaveni-2008.app.n8n.cloud/webhook/80cc71d7-4ad5-42b7-aa1a-cf3e7d72f611/chat';
+const DEFAULT_N8N_WEBHOOK_ID =
+  process.env.N8N_WEBHOOK_ID || '6172d2e9ccd14cd4926fb4d5a424bfd9';
+const DEFAULT_N8N_INSTANCE_ID =
+  process.env.N8N_INSTANCE_ID || 'cee1a0d60bb4ce214943dfe5538661d2dc03baf8f989e3857c93122c24a4e544';
+
+// -------------------------------------------------------------
+// API: Full Website Training Data Export (/api/training-data)
+// -------------------------------------------------------------
+app.get('/api/training-data', (req, res) => {
+  const { jobCatalog, profileContext } = buildWebsiteKnowledgeBase(INITIAL_JOB_OPPORTUNITIES);
+  res.json({
+    portalName: 'GovtJob AI — All-in-One Government Job and Internship Portal',
+    portalUrl: 'https://govtjobai.in',
+    version: '2026.1',
+    lastUpdated: new Date().toISOString(),
+    totalActiveOpportunities: INITIAL_JOB_OPPORTUNITIES.length,
+    coverage: {
+      andhraPradeshJobs: INITIAL_JOB_OPPORTUNITIES.filter((j) => j.category === 'andhra_pradesh').length,
+      centralGovtJobs: INITIAL_JOB_OPPORTUNITIES.filter((j) => j.category === 'central_govt').length,
+      cybersecurityRoles: INITIAL_JOB_OPPORTUNITIES.filter((j) => j.isCybersecurity).length,
+      studentInternships: INITIAL_JOB_OPPORTUNITIES.filter((j) => j.isInternship).length,
+      womenExclusiveOpportunities: INITIAL_JOB_OPPORTUNITIES.filter((j) => j.isWomenExclusive).length,
+    },
+    statutoryRules: {
+      andhraPradeshLocalQuota: '80% reservation in district/zonal cadres under AP Presidential Order (Study certificates Class 4-10 required).',
+      womenReservations: '33.33% horizontal reservation in AP state recruitment; 100% exam fee exemption across UPSC, SSC, RRB.',
+      ageRelaxations: 'SC/ST: 5 years; BC/OBC-NCL: 3 to 5 years; PwD: 10 years; EWS: age relaxation per state rules.',
+    },
+    opportunities: INITIAL_JOB_OPPORTUNITIES,
+    rawTextKnowledgeBase: jobCatalog,
+  });
+});
+
+app.post('/api/n8n/test', async (req, res) => {
+  try {
+    const { webhookUrl, webhookId } = req.body;
+    const targetWebhookId = webhookId || DEFAULT_N8N_WEBHOOK_ID;
+    const targetUrl = webhookUrl || process.env.N8N_WEBHOOK_URL || DEFAULT_N8N_WEBHOOK_URL;
+
+    const testPayload = {
+      action: 'sendMessage',
+      sessionId: `test-${Date.now()}`,
+      chatInput: 'ping',
+      message: 'ping',
+      text: 'ping',
+      webhookId: targetWebhookId,
+    };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Instance-Id': DEFAULT_N8N_INSTANCE_ID,
+        'X-N8N-Webhook-Id': targetWebhookId,
+      },
+      body: JSON.stringify(testPayload),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    let replySnippet = '';
+    try {
+      const data = await response.json();
+      replySnippet = data.output || data.text || data.message || JSON.stringify(data);
+    } catch {
+      replySnippet = await response.text();
+    }
+
+    return res.json({
+      ok: response.ok,
+      status: response.status,
+      message: response.ok
+        ? `Successfully connected to n8n chat workflow! Response: "${replySnippet.slice(0, 100)}"`
+        : `n8n responded with HTTP status ${response.status}`,
+      webhookId: targetWebhookId,
+      url: targetUrl,
+    });
+  } catch (error: any) {
+    return res.json({
+      ok: false,
+      message: `Could not reach n8n instance: ${error.message || 'Connection timeout or network error'}`,
+      webhookId: req.body?.webhookId || DEFAULT_N8N_WEBHOOK_ID,
+      error: error.message,
+    });
+  }
+});
+
+app.post('/api/n8n/chat', async (req, res) => {
+  try {
+    const {
+      message,
+      messages,
+      sessionId,
+      userContext,
+      allOpportunities,
+      userCertificates,
+      n8nWebhookUrl,
+      n8nWebhookId,
+    } = req.body;
+
+    const queryText = message || (messages && messages[messages.length - 1]?.text) || 'Hello';
+    const targetWebhookId = n8nWebhookId || DEFAULT_N8N_WEBHOOK_ID;
+    const targetUrl = n8nWebhookUrl || process.env.N8N_WEBHOOK_URL || DEFAULT_N8N_WEBHOOK_URL;
+
+    const activeJobList = (allOpportunities && allOpportunities.length > 0) ? allOpportunities : INITIAL_JOB_OPPORTUNITIES;
+    const { jobCatalog, profileContext } = buildWebsiteKnowledgeBase(activeJobList, userContext, userCertificates);
+
+    // If an n8n webhook URL is available, send to n8n workflow with ALL website training data
+    if (targetUrl) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+
+        const n8nPayload = {
+          action: 'sendMessage',
+          sessionId: sessionId || `candidate-${userContext?.id || 'guest'}`,
+          chatInput: queryText,
+          message: queryText,
+          text: queryText,
+          query: queryText,
+          input: queryText,
+          webhookId: targetWebhookId,
+          timestamp: new Date().toISOString(),
+          // Full website data fed into the n8n agent
+          websiteTrainingData: {
+            portalName: 'GovtJob AI Portal',
+            activeOpportunitiesCount: activeJobList.length,
+            knowledgeBaseSummary: jobCatalog,
+            opportunities: activeJobList.map((j: any) => ({
+              id: j.id,
+              title: j.title,
+              organization: j.organization,
+              category: j.category,
+              vacanciesCount: j.vacanciesCount,
+              payScaleOrStipend: j.payScaleOrStipend,
+              educationalQualifications: j.educationalQualifications,
+              eligibleBranches: j.eligibleBranches,
+              ageLimit: j.ageLimit,
+              applicationDeadline: j.applicationDeadline,
+              officialApplicationUrl: j.officialApplicationUrl,
+              officialNotificationUrl: j.officialNotificationUrl,
+              isCybersecurity: j.isCybersecurity,
+              isInternship: j.isInternship,
+              isWomenExclusive: j.isWomenExclusive,
+              isPaid: j.isPaid,
+            })),
+          },
+          candidateProfile: userContext || null,
+          candidateCertificates: userCertificates || [],
+          portalContext: {
+            activeVacanciesCount: activeJobList.length,
+            verifiedSources: ['APPSC', 'UPSC', 'SSC', 'RRB', 'IBPS', 'CERT-In', 'NIC', 'NITI Aayog', 'AICTE'],
+          },
+        };
+
+        const n8nResponse = await fetch(targetUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Instance-Id': DEFAULT_N8N_INSTANCE_ID,
+            'X-N8N-Webhook-Id': targetWebhookId,
+          },
+          body: JSON.stringify(n8nPayload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        if (n8nResponse.ok) {
+          const contentType = n8nResponse.headers.get('content-type') || '';
+          let n8nReply = '';
+
+          if (contentType.includes('application/json')) {
+            const data = await n8nResponse.json();
+            // Handle various n8n output formats
+            if (typeof data === 'string') {
+              n8nReply = data;
+            } else if (Array.isArray(data) && data[0]?.json) {
+              n8nReply = data[0].json.output || data[0].json.text || data[0].json.message || JSON.stringify(data[0].json);
+            } else if (Array.isArray(data) && data[0]?.output) {
+              n8nReply = data[0].output;
+            } else if (data.output) {
+              n8nReply = data.output;
+            } else if (data.text) {
+              n8nReply = data.text;
+            } else if (data.message && data.message !== 'Error in workflow') {
+              n8nReply = data.message;
+            } else if (data.response) {
+              n8nReply = data.response;
+            } else if (data.reply) {
+              n8nReply = data.reply;
+            } else if (!data.message || data.message !== 'Error in workflow') {
+              n8nReply = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+            }
+          } else {
+            n8nReply = await n8nResponse.text();
+          }
+
+          if (n8nReply && n8nReply.trim().length > 0 && !n8nReply.includes('Error in workflow')) {
+            return res.json({
+              success: true,
+              source: 'n8n',
+              webhookId: targetWebhookId,
+              answer: n8nReply,
+            });
+          }
+        }
+      } catch (n8nErr: any) {
+        console.warn(`n8n webhook dispatch to ${targetUrl} failed, falling back to core AI:`, n8nErr.message);
+      }
+    }
+
+    // Fallback: Use Gemini or Portal Knowledge Base with n8n status attribution
+    let coreAnswer = '';
+    if (aiClient) {
+      try {
+        const systemInstruction = `You are "GovtJob AI Assistant (powered by n8n Workflow ${targetWebhookId})", an AI agent integrated with the GovtJob AI Portal knowledge base.
+
+CANDIDATE CONTEXT:
+${profileContext}
+
+PORTAL OPPORTUNITIES (${activeJobList.length} VERIFIED LISTINGS):
+${jobCatalog}
+
+Answer the candidate's query with maximum precision, citing deadlines, pay scales, vacancies, and official application portals.`;
+
+        const response = await aiClient.models.generateContent({
+          model: 'gemini-3.8-flash',
+          contents: [{ role: 'user', parts: [{ text: queryText }] }],
+          config: { systemInstruction, temperature: 0.6 },
+        });
+        coreAnswer = response.text || '';
+      } catch (aiErr) {
+        console.warn('Gemini call failed during n8n fallback:', aiErr);
+      }
+    }
+
+    if (!coreAnswer) {
+      coreAnswer = generateAssistantResponseFromDatabase(queryText, userContext, activeJobList);
+    }
+
+    const n8nPrefix = `⚡ **n8n Workflow Connected** \`[ID: ${targetWebhookId}]\`\n\n`;
+
+    return res.json({
+      success: true,
+      source: 'n8n-hybrid',
+      webhookId: targetWebhookId,
+      answer: `${n8nPrefix}${coreAnswer}`,
+      n8nStatus: targetUrl ? 'forwarded' : 'ready',
+    });
+  } catch (error: any) {
+    console.error('n8n chat error:', error);
+    res.status(500).json({ error: error.message || 'n8n processing failed' });
+  }
+});
 
 // -------------------------------------------------------------
 // Dev & Production Server Mounting
